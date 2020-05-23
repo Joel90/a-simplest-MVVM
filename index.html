@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>手写一个极简的MVVM框架</title>
+</head>
+<body>
+  <div id="app">
+    <span>我是{{ username }}</span>
+    <span>今年{{ age }}岁</span>
+    <input type="text" v-model="username" />
+    <br />
+    <button @click="addAge">长大</button>
+    <button v-on:click="subAge">减龄</button>
+  </div>
+  
+  <script>
+  // 只是实现最基本的 数据劫持、模板编译、发布订阅、DOM更新
+  // 不涉及虚拟DOM、递归处理 等，只是最简陋的 MVVM
+
+  class Publisher {
+    constructor () {
+      this.subscribers = []; // 粉丝团
+    }
+    addSubscriber (subscriber) {
+      this.subscribers.push(subscriber);
+    }
+    notify (oldVal, newVal) {
+      if (oldVal !== newVal) { // 必须判断，否则v-model就无限死循环了
+        this.subscribers.forEach(subscriber => {
+          subscriber.update(newVal);
+        });
+      }
+    }
+  }
+  // 订阅者 明星的粉丝
+  class Subscriber {
+    constructor (el) {
+      this.el = el;
+    }
+    staticStructure (before, after) { // 直接使用字符串replace方法更新的话，遇到空字符串，会丢失位置，所以存储一下
+      this.staticBefore = before;
+      this.staticAfter = after;
+    }
+    update (newVal) {
+      if (this.el.tagName === 'INPUT') {
+        this.el.value = newVal;
+      } else {
+        this.el.innerText = this.staticBefore + newVal + this.staticAfter;
+      }
+    }
+  }
+  
+  class Vue {
+    constructor(options) {
+      this.$options = options; // new Vue 时传入的是options对象，所以叫options API
+      this.$el = document.querySelector(options.el);
+      this.$data = options.data;
+      this.$methods = options.methods;
+      this._watcher = {};
+
+      this.hijack(); // 实现数据劫持
+      this.compile(); // 编译模板，注册订阅者
+    }
+    hijack () {
+      Object.keys(this.$data).forEach(key => {
+        // 每个数据都是一个被观察的目标对象 就像是一个明星 每个数据对应一个Publisher
+        this._watcher[key] = new Publisher();
+        Object.defineProperty(this, key, {
+          get () {
+            return this.$data[key];
+          },
+          set (newVal) {
+            this._watcher[key].notify(this[key], newVal);
+            this.$data[key] = newVal;
+          }
+        })
+      })
+    }
+    compile () {
+      var arr = this.$el.children; // 一个所有的元素子节点的数组
+      for (var i = 0, len = arr.length; i < len; i++) {
+        if (arr[i].tagName === 'INPUT') {
+          var key = arr[i].getAttribute('v-model');
+          var subscriber = new Subscriber(arr[i]); // 每个绑定了数据的DOM都是一个观察者（订阅者）
+          this._watcher[key].addSubscriber(subscriber);
+          arr[i].value = this[key];
+          var vm = this; // 事件处理函数里的this指向问题
+          arr[i].oninput = function () {
+            vm[key] = this.value;
+          }
+        } else if (arr[i].tagName === 'BUTTON') {
+          var attrNodes = arr[i].attributes; // 一个元素的所有属性节点的Map伪数组
+          Array.from(attrNodes).forEach(attr => {
+            var event = '';
+            if (attr.name.startsWith('@')) {
+              event = attr.name.slice(1);
+            } else if (attr.name.startsWith('v-on')) {
+              event = attr.name.split(':')[1];
+            }
+            arr[i][`on${event}`] = this.$methods[attr.value].bind(this); // 事件处理函数里的this指向问题
+          })
+        } else {
+          var reg = /(.*)\{\{(.*)\}\}(.*)/;
+          var strArr = reg.exec(arr[i].innerText);
+          // exec() 方法： 匹配成功就返回一个数组，失败就返回null。  数组第一项是整个被匹配的字符串，后面依次是每个 () 对应的提取项
+          if (strArr) {
+            var subscriber = new Subscriber(arr[i]);
+            subscriber.staticStructure(strArr[1], strArr[3]);
+            var key = strArr[2].trim();
+            this._watcher[key].addSubscriber(subscriber);
+            arr[i].innerText = strArr[1] + this[key] + strArr[3];
+          }
+        }
+      }
+    }
+  }
+
+  var vm = new Vue({
+    el: '#app',
+    data: {
+      username: '张三',
+      age: 28
+    },
+    methods: {
+      addAge () {
+        this.age++;
+      },
+      subAge () {
+        this.age--;
+      }
+    }
+  });
+  </script>
+</body>
+</html>
